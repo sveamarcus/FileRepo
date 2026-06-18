@@ -14,16 +14,15 @@
 // Shared fixtures for the FileRepo test suite (Swift Testing).
 //
 // FileRepo is a fixed-record-size, height-indexed flat file used as a linear
-// database for Bitcoin blockchain storage. These helpers build an isolated repo
-// over a freshly created temp file, run a body that drives the repo through its
-// (blocking-`wait`ed) EventLoopFuture API, and guarantee teardown — so every test
-// runs against pristine, independent state even under Swift Testing's parallel
-// execution.
+// database for Bitcoin blockchain storage. Following the NIOFileSystem + async/await
+// migration these helpers build an isolated repo over a freshly created temp file,
+// run an `async` body that drives the repo through its `async throws` API, and
+// guarantee teardown (which now `await`s the handle close) on both the success and
+// failure paths.
 //
 import FileRepo
 import Foundation
 import NIOCore
-import NIOPosix
 import Testing
 
 // MARK: - Concrete repo under test
@@ -39,24 +38,18 @@ final class StringRepo: FileRepo {
     }
 
     let allocator: ByteBufferAllocator
-    let nioFileHandle: NIOFileHandle
-    let nonBlockingFileIO: NonBlockingFileIOClient
-    let eventLoop: EventLoop
+    let io: FileIOClient
     let recordSize: Int
     let offset: Int
     let fieldSelector: ClosedRange<Int>?
 
     init(allocator: ByteBufferAllocator = .init(),
-         nioFileHandle: NIOFileHandle,
-         nonBlockingFileIO: NonBlockingFileIOClient,
-         eventLoop: EventLoop,
+         io: FileIOClient,
          recordSize: Int,
          offset: Int = 0,
          fieldSelector: ClosedRange<Int>? = nil) {
         self.allocator = allocator
-        self.nioFileHandle = nioFileHandle
-        self.nonBlockingFileIO = nonBlockingFileIO
-        self.eventLoop = eventLoop
+        self.io = io
         self.recordSize = recordSize
         self.offset = offset
         self.fieldSelector = fieldSelector
@@ -82,46 +75,31 @@ final class StringRepo: FileRepo {
 
 // MARK: - Fixture
 
-/// Owns the NIO machinery and a temporary file for the lifetime of a single test.
+/// Owns a `FileIOClient` over a temporary file for the lifetime of a single test.
 /// Construct via the `withStringRepo`/`withRawStringRepo` helpers, which guarantee
-/// `shutdown()` runs even when the test body throws.
+/// `shutdown()` runs (and is awaited) even when the test body throws.
 final class FileRepoFixture {
-    let eventLoopGroup: MultiThreadedEventLoopGroup
-    let threadPool: NIOThreadPool
-    let eventLoop: EventLoop
-    let client: NonBlockingFileIOClient
+    let io: FileIOClient
     let path: String
-    let fileHandle: NIOFileHandle
 
     /// Creates the temp file and writes `seed` bytes verbatim as its initial contents.
-    init(seed: [UInt8]) throws {
+    init(seed: [UInt8]) async throws {
         self.path = "/tmp/filerepo_test_\(UUID().uuidString)"
-        self.eventLoopGroup = MultiThreadedEventLoopGroup(numberOfThreads: 1)
-        self.threadPool = NIOThreadPool(numberOfThreads: 2)
-        self.threadPool.start()
-        self.eventLoop = self.eventLoopGroup.next()
-        self.client = NonBlockingFileIOClient.live(self.threadPool)
-
-        let handle = try NIOFileHandle(path: self.path,
-                                       mode: [.read, .write],
-                                       flags: .allowFileCreation(posixMode: 0o600))
-        self.fileHandle = handle
+        self.io = try await FileIOClient.live(path: self.path)
 
         if !seed.isEmpty {
             var buffer = ByteBufferAllocator().buffer(capacity: seed.count)
             buffer.writeBytes(seed)
-            try self.client.write(fileHandle: handle, toOffset: 0, buffer: buffer, eventLoop: self.eventLoop).wait()
+            try await self.io.write(buffer, toOffset: 0)
         }
     }
 
-    func shutdown() {
-        // Close the repo's file handle (ignore double-close), remove the temp file,
-        // and tear down the NIO machinery. Failures here are cleanup noise, not test
-        // signal, so they are swallowed deliberately.
-        try? self.fileHandle.close()
-        try? FileManager.default.removeItem(atPath: self.path)
-        try? self.threadPool.syncShutdownGracefully()
-        try? self.eventLoopGroup.syncShutdownGracefully()
+    /// Close the handle (idempotent — safe even if the test already closed the repo)
+    /// and remove the temp file. Failures here are cleanup noise, not test signal, so
+    /// they are swallowed deliberately.
+    func shutdown() async {
+        try? await self.io.close()
+        try? await File.delete(file: self.path)
     }
 }
 
@@ -150,17 +128,21 @@ func withStringRepo<R>(recordSize: Int = 100,
                        offset: Int = 0,
                        fieldSelector: ClosedRange<Int>? = nil,
                        seed values: [String],
-                       _ body: (StringRepo, FileRepoFixture) throws -> R) throws -> R {
+                       _ body: (StringRepo, FileRepoFixture) async throws -> R) async throws -> R {
     let fieldStart = fieldSelector?.lowerBound ?? 0
-    let fixture = try FileRepoFixture(seed: encodeRecords(values, recordSize: recordSize, fieldStart: fieldStart))
-    defer { fixture.shutdown() }
-    let repo = StringRepo(nioFileHandle: fixture.fileHandle,
-                          nonBlockingFileIO: fixture.client,
-                          eventLoop: fixture.eventLoop,
-                          recordSize: recordSize,
-                          offset: offset,
-                          fieldSelector: fieldSelector)
-    return try body(repo, fixture)
+    let fixture = try await FileRepoFixture(seed: encodeRecords(values, recordSize: recordSize, fieldStart: fieldStart))
+    do {
+        let repo = StringRepo(io: fixture.io,
+                              recordSize: recordSize,
+                              offset: offset,
+                              fieldSelector: fieldSelector)
+        let result = try await body(repo, fixture)
+        await fixture.shutdown()
+        return result
+    } catch {
+        await fixture.shutdown()
+        throw error
+    }
 }
 
 /// Seed a repo with an arbitrary raw byte image — used to inject corruption
@@ -170,16 +152,20 @@ func withRawStringRepo<R>(recordSize: Int,
                           offset: Int = 0,
                           fieldSelector: ClosedRange<Int>? = nil,
                           rawBytes: [UInt8],
-                          _ body: (StringRepo, FileRepoFixture) throws -> R) throws -> R {
-    let fixture = try FileRepoFixture(seed: rawBytes)
-    defer { fixture.shutdown() }
-    let repo = StringRepo(nioFileHandle: fixture.fileHandle,
-                          nonBlockingFileIO: fixture.client,
-                          eventLoop: fixture.eventLoop,
-                          recordSize: recordSize,
-                          offset: offset,
-                          fieldSelector: fieldSelector)
-    return try body(repo, fixture)
+                          _ body: (StringRepo, FileRepoFixture) async throws -> R) async throws -> R {
+    let fixture = try await FileRepoFixture(seed: rawBytes)
+    do {
+        let repo = StringRepo(io: fixture.io,
+                              recordSize: recordSize,
+                              offset: offset,
+                              fieldSelector: fieldSelector)
+        let result = try await body(repo, fixture)
+        await fixture.shutdown()
+        return result
+    } catch {
+        await fixture.shutdown()
+        throw error
+    }
 }
 
 // MARK: - Deterministic pseudo-randomness
@@ -212,21 +198,15 @@ final class HeaderRepo: HeaderRepoProtocol {
     }
 
     let allocator: ByteBufferAllocator
-    let nioFileHandle: NIOFileHandle
-    let nonBlockingFileIO: NonBlockingFileIOClient
-    let eventLoop: EventLoop
+    let io: FileIOClient
     let recordSize: Int
     let offset: Int
 
-    init(nioFileHandle: NIOFileHandle,
-         nonBlockingFileIO: NonBlockingFileIOClient,
-         eventLoop: EventLoop,
+    init(io: FileIOClient,
          recordSize: Int,
          offset: Int) {
         self.allocator = .init()
-        self.nioFileHandle = nioFileHandle
-        self.nonBlockingFileIO = nonBlockingFileIO
-        self.eventLoop = eventLoop
+        self.io = io
         self.recordSize = recordSize
         self.offset = offset
     }
@@ -252,7 +232,6 @@ extension File.Error {
     var isCorruption: Bool { if case .fileCorruptionError = self { return true }; return false }
     var isEmptyFile: Bool { if case .noDataFoundFileEmpty = self { return true }; return false }
     var isAppendOrdering: Bool { if case .appendFailedIncorrectOrdering = self { return true }; return false }
-    var isNotFound: Bool { if case .notFound = self { return true }; return false }
     var isRead: Bool { if case .readError = self { return true }; return false }
     var isIllegalArgument: Bool { if case .illegalArgument = self { return true }; return false }
 
@@ -260,14 +239,14 @@ extension File.Error {
     var seekMessage: String? { if case let .seekError(message, _) = self { return message }; return nil }
 }
 
-/// Run a throwing body that is expected to fail with a `File.Error`; return it for
-/// case inspection. Records a Swift Testing issue if it does not throw, or throws a
-/// different error type.
+/// Run a throwing `async` body that is expected to fail with a `File.Error`; return
+/// it for case inspection. Records a Swift Testing issue if it does not throw, or
+/// throws a different error type.
 @discardableResult
-func captureFileError<R>(_ body: () throws -> R,
-                         sourceLocation: SourceLocation = #_sourceLocation) -> File.Error? {
+func captureFileError<R>(_ body: () async throws -> R,
+                         sourceLocation: SourceLocation = #_sourceLocation) async -> File.Error? {
     do {
-        _ = try body()
+        _ = try await body()
         Issue.record("expected a thrown File.Error, but the call returned normally", sourceLocation: sourceLocation)
         return nil
     } catch let error as File.Error {
@@ -281,30 +260,47 @@ func captureFileError<R>(_ body: () throws -> R,
 // MARK: - Fault injection
 
 struct InjectedWriteError: Swift.Error {}
+struct InjectedSyncError: Swift.Error {}
 
 /// A client that delegates everything to `base` except `write`, which always fails
 /// with `InjectedWriteError`. Lets us exercise the write-failure path of `append`
 /// and `write` deterministically (count()/read still work so ordering checks pass).
-func faultyWriteClient(base: NonBlockingFileIOClient) -> NonBlockingFileIOClient {
-    NonBlockingFileIOClient(
-        changeFileSize0: { fh, sz, el in base.changeFileSize(fileHandle: fh, size: sz, eventLoop: el) },
-        close0: { fh, el in base.close(fileHandle: fh, eventLoop: el) },
-        openFile0: { path, mode, flags, el in base.openFile(path: path, mode: mode, flags: flags, eventLoop: el) },
-        readChunkedFileHandle: { fh, bc, cs, alloc, el, handler in
-            base.readChunked(fileHandle: fh, byteCount: bc, chunkSize: cs, allocator: alloc, eventLoop: el, chunkHandler: handler)
-        },
-        readChunkedFileOffset: { fh, off, bc, cs, alloc, el, handler in
-            base.readChunked(fileHandle: fh, fromOffset: off, byteCount: bc, chunkSize: cs, allocator: alloc, eventLoop: el, chunkHandler: handler)
-        },
-        readChunkedFileRegion: { region, cs, alloc, el, handler in
-            base.readChunked(fileRegion: region, chunkSize: cs, allocator: alloc, eventLoop: el, chunkHandler: handler)
-        },
-        readFileHandle: { fh, bc, alloc, el in base.read(fileHandle: fh, byteCount: bc, allocator: alloc, eventLoop: el) },
-        readFileOffset: { fh, off, bc, alloc, el in base.read(fileHandle: fh, fromOffset: off, byteCount: bc, allocator: alloc, eventLoop: el) },
-        readFileRegion: { region, alloc, el in base.read(fileRegion: region, allocator: alloc, eventLoop: el) },
-        readFileSize0: { fh, el in base.readFileSize(fileHandle: fh, eventLoop: el) },
-        write0: { _, _, _, el in el.makeFailedFuture(InjectedWriteError()) },
-        sync0: { fh, el in base.sync(fileHandle: fh, eventLoop: el) }
+func faultyWriteClient(base: FileIOClient) -> FileIOClient {
+    FileIOClient(
+        readChunk0: { offset, byteCount in try await base.readChunk(fromOffset: offset, byteCount: byteCount) },
+        write0: { _, _ in throw InjectedWriteError() },
+        size0: { try await base.size() },
+        resize0: { size in try await base.resize(to: size) },
+        synchronize0: { try await base.synchronize() },
+        close0: { try await base.close() }
+    )
+}
+
+/// A client that delegates everything to `base` except `synchronize`, which always
+/// fails with `InjectedSyncError`. Lets us assert that `close()` still closes the
+/// handle (no leaked-descriptor trap) when its durability flush fails.
+func faultySyncClient(base: FileIOClient) -> FileIOClient {
+    FileIOClient(
+        readChunk0: { offset, byteCount in try await base.readChunk(fromOffset: offset, byteCount: byteCount) },
+        write0: { buffer, offset in try await base.write(buffer, toOffset: offset) },
+        size0: { try await base.size() },
+        resize0: { size in try await base.resize(to: size) },
+        synchronize0: { throw InjectedSyncError() },
+        close0: { try await base.close() }
+    )
+}
+
+/// A client whose single-`pread` `readChunk` never returns more than `cap` bytes,
+/// forcing `FileIOClient.read(fromOffset:byteCount:)` to exercise its multi-chunk
+/// fill loop (and its true-EOF stop condition).
+func cappedReadClient(base: FileIOClient, cap: Int) -> FileIOClient {
+    FileIOClient(
+        readChunk0: { offset, byteCount in try await base.readChunk(fromOffset: offset, byteCount: Swift.min(byteCount, cap)) },
+        write0: { buffer, offset in try await base.write(buffer, toOffset: offset) },
+        size0: { try await base.size() },
+        resize0: { size in try await base.resize(to: size) },
+        synchronize0: { try await base.synchronize() },
+        close0: { try await base.close() }
     )
 }
 

@@ -10,14 +10,15 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 //===----------------------------------------------------------------------===//
+import NIOFileSystem
 
-public protocol HeaderRepoProtocol: FileRepo where Model.ID == Int {
-    func heights() async throws -> (lowerHeight: Int, upperHeight: Int)
-}
+public extension File {
+    static func rename(file: String, to: String) async throws {
+        _ = try? await FileSystem.shared.removeItem(at: FilePath(to))
+        _ = try await FileSystem.shared.moveItem(at: FilePath(file), to: FilePath(to))
+    }
 
-public extension HeaderRepoProtocol {
-    @inlinable func heights() async throws -> (lowerHeight: Int, upperHeight: Int) {
-        let range = try await self.range()
-        return (lowerHeight: range.lowerBound, upperHeight: max(range.upperBound - 1, 0))
+    static func delete(file: String) async throws {
+        _ = try await FileSystem.shared.removeItem(at: FilePath(file))
     }
 }

@@ -10,71 +10,70 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 //===----------------------------------------------------------------------===//
-import HaByLo
-import NIOCore
+import Logging
 
 public enum File {}
 
 public extension File {
+    /// Opens (or creates, mode `0o600`) the file at `path` for reading and writing.
+    /// Convenience alias for ``FileIOClient/live(path:)``.
     @inlinable
-    static func openFile(path: String,
-                         nonBlockingFileIO: NonBlockingFileIOClient,
-                         eventLoop: EventLoop) -> EventLoopFuture<NIOFileHandle> {
-        nonBlockingFileIO.openFile(path: path,
-                                   mode: [.read, .write],
-                                   flags: .allowFileCreation(posixMode: 0o600),
-                                   eventLoop: eventLoop)
+    static func open(path: String) async throws -> FileIOClient {
+        try await FileIOClient.live(path: path)
     }
-    
-    @inlinable
-    static func closeRecover(on eventLoop: EventLoop,
-                             _ futures: (() -> EventLoopFuture<Void>)...) -> EventLoopFuture<Void> {
-        self.close(on: eventLoop, futures)
-        .recover {
-            logger.error("\($0)")
-        }
-    }
-    
-    @inlinable
-    static func closeFail(on eventLoop: EventLoop,
-                          _ futures: (() -> EventLoopFuture<Void>)...) -> EventLoopFuture<Void> {
-        self.close(on: eventLoop, futures)
-        .recover {
-            preconditionFailure("\($0)")
-        }
-    }
-    
-    @inlinable
-    static func close(on eventLoop: EventLoop,
-                      _ futures: (() -> EventLoopFuture<Void>)...) -> EventLoopFuture<Void> {
-        self.close(on: eventLoop, futures)
-    }
-    
-    @inlinable
-    static func close(on eventLoop: EventLoop,
-                      _ futures: [() -> EventLoopFuture<Void>]) -> EventLoopFuture<Void> {
-        
-        let promise = eventLoop.makePromise(of: Void.self)
 
-        EventLoopFuture.whenAllComplete(futures.map({$0()}), on: eventLoop)
-        .whenSuccess {
-            let failures: [Swift.Error] = $0.compactMap {
-                switch $0 {
-                case .failure(let error):
-                    return error
-                case .success:
-                    return nil
-                }
-            }
-            
-            if failures.isEmpty {
-                promise.succeed(())
-            } else {
-                promise.fail(CompoundError(failures))
+    /// Runs every close operation, logging — but not propagating — any error.
+    @inlinable
+    static func closeRecover(_ closes: @Sendable () async throws -> Void...) async {
+        await self.closeRecover(closes)
+    }
+
+    @inlinable
+    static func closeRecover(_ closes: [@Sendable () async throws -> Void]) async {
+        do {
+            try await self.close(closes)
+        } catch {
+            fileRepoLog.error("❌ close failed (recovered): \(error)")
+        }
+    }
+
+    /// Runs every close operation, trapping on any error.
+    @inlinable
+    static func closeFail(_ closes: @Sendable () async throws -> Void...) async {
+        await self.closeFail(closes)
+    }
+
+    @inlinable
+    static func closeFail(_ closes: [@Sendable () async throws -> Void]) async {
+        do {
+            try await self.close(closes)
+        } catch {
+            preconditionFailure("\(error)")
+        }
+    }
+
+    /// Runs every close operation, waiting for all to finish. Every operation is
+    /// attempted even if an earlier one fails; if any fail, all failures are
+    /// collected and rethrown together as a `CompoundError`.
+    @inlinable
+    static func close(_ closes: @Sendable () async throws -> Void...) async throws {
+        try await self.close(closes)
+    }
+
+    @inlinable
+    static func close(_ closes: [@Sendable () async throws -> Void]) async throws {
+        var failures: [any Swift.Error] = []
+        for close in closes {
+            do {
+                try await close()
+            } catch {
+                failures.append(error)
             }
         }
-        
-        return promise.futureResult
+
+        if !failures.isEmpty {
+            throw CompoundError(failures)
+        }
     }
 }
 
@@ -82,14 +81,14 @@ internal extension File {
     @usableFromInline
     struct CompoundError: Swift.Error, CustomStringConvertible {
         @usableFromInline
-        let value: [Swift.Error]
-        
+        let value: [any Swift.Error]
+
         @usableFromInline
-        init(_ value: [Swift.Error]) {
+        init(_ value: [any Swift.Error]) {
             precondition(!value.isEmpty)
             self.value = value
         }
-        
+
         @usableFromInline
         var description: String {
             var str: [String] = [ "File.close(...) finished with errors:" ]
@@ -97,7 +96,7 @@ internal extension File {
                 str.append("\n\t\(i):\t")
                 str.append("\(e)")
             }
-            
+
             return str.joined()
         }
     }

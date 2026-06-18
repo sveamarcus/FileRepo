@@ -28,10 +28,10 @@ public extension File {
         case seekError(message: String, event: StaticString)
     }
 
-    struct NoExactMatchFound<T>: Swift.Error {
+    struct NoExactMatchFound<T: Sendable>: Swift.Error {
         public let left: T
         public let right: T
-        
+
         public init(left: T, right: T) {
             self.left = left
             self.right = right

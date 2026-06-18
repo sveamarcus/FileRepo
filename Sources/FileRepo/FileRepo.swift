@@ -11,11 +11,12 @@
 //
 //===----------------------------------------------------------------------===//
 import HaByLo
+import NIOConcurrencyHelpers
 import NIOCore
 
-public protocol FileRepo: AnyObject {
-    associatedtype Model: Identifiable
-    
+public protocol FileRepo: AnyObject, Sendable {
+    associatedtype Model: Identifiable & Sendable
+
     var allocator: ByteBufferAllocator { get }
     var nioFileHandle: NIOFileHandle { get }
     var nonBlockingFileIO: NonBlockingFileIOClient { get }
@@ -129,9 +130,13 @@ public extension FileRepo {
     
     @inlinable
     func find(from: Int, through: Int? = nil, event: StaticString = #function) -> EventLoopFuture<[Model]> {
-        var readCount = 0
-        var result: [Model] = []
-        
+        // `readChunked` invokes its chunk handler repeatedly, and the handler is an
+        // `@Sendable` closure, so the running tally cannot live in captured `var`s
+        // under complete concurrency checking. A lock-protected box carries it across
+        // invocations; the lock is uncontended because the handler only ever runs
+        // serially on `self.eventLoop`. Tuple .0 = decoded rows, .1 = records read.
+        let accumulator = NIOLockedValueBox<([Model], Int)>(([], 0))
+
         return self.checkOffset(for: from).flatMap { fromId in
             self.count().flatMap { count in
                 let through = through ?? (self.offset + count - 1)
@@ -149,10 +154,10 @@ public extension FileRepo {
                             event: event
                         )
                     }
-                    
+
                     let chunkedReaderIndex = fromId * self.recordSize
                     let chunkedReadedEndIndex = (throughId + 1) * self.recordSize
-                    
+
                     return (chunkedReaderIndex, chunkedReadedEndIndex)
                 }
                 .flatMap { chunkedReaderIndex, chunkedReadedEndIndex in
@@ -163,29 +168,30 @@ public extension FileRepo {
                                                        allocator: self.allocator,
                                                        eventLoop: self.eventLoop) { (buffer: ByteBuffer) in
                         assert(buffer.readableBytes % self.recordSize == 0)
-                                                        
+
                         var buffer = buffer
                         let fieldStart = self.fieldSelector?.lowerBound ?? 0
 
-                        while var record = buffer.readSlice(length: self.recordSize) {
-                            record.moveReaderIndex(forwardBy: fieldStart)
-
-                            do {
-                                result.append(
-                                    try self.fileDecode(id: from + readCount, buffer: &record)
-                                )
-                            } catch {
-                                return self.eventLoop.makeFailedFuture(error)
+                        do {
+                            try accumulator.withLockedValue { tally in
+                                while var record = buffer.readSlice(length: self.recordSize) {
+                                    record.moveReaderIndex(forwardBy: fieldStart)
+                                    tally.0.append(
+                                        try self.fileDecode(id: from + tally.1, buffer: &record)
+                                    )
+                                    tally.1 += 1
+                                }
                             }
-
-                            readCount += 1
+                        } catch {
+                            return self.eventLoop.makeFailedFuture(error)
                         }
 
                         return self.eventLoop.makeSucceededFuture(())
                     }
                     .flatMapThrowing {
+                        let (result, readCount) = accumulator.withLockedValue { $0 }
                         assert(result.count == readCount)
-                        
+
                         guard result.count == through - from + 1 else {
                             throw File.Error.fileCorruptionError(event: event)
                         }
@@ -198,13 +204,13 @@ public extension FileRepo {
     }
 
     @inlinable
-    func binarySearch<T: Comparable>(comparable: T,
-                                     left: Int,
-                                     right: Int,
-                                     event: StaticString = #function,
-                                     selector: @escaping (Model) -> T) -> EventLoopFuture<Model> {
-        func innerBinarySearch(innerLeft: Int,
-                               innerRight: Int) -> EventLoopFuture<Model> {
+    func binarySearch<T: Comparable & Sendable>(comparable: T,
+                                                left: Int,
+                                                right: Int,
+                                                event: StaticString = #function,
+                                                selector: @escaping @Sendable (Model) -> T) -> EventLoopFuture<Model> {
+        @Sendable func innerBinarySearch(innerLeft: Int,
+                                         innerRight: Int) -> EventLoopFuture<Model> {
             guard innerLeft <= innerRight else {
                 return self.find(id: max(left, innerLeft - 1), event: event)
                 .and(self.find(id: min(right, innerRight + 1), event: event))
@@ -232,61 +238,12 @@ public extension FileRepo {
         
         return innerBinarySearch(innerLeft: left, innerRight: right)
     }
-
-//    @inlinable
-//    func binarySearch<T: Comparable>(comparable: T,
-//                                     left: Int,
-//                                     right: Int,
-//                                     event: StaticString = #function,
-//                                     selector: @escaping (Model) -> T) -> EventLoopFuture<Model> {
-//        guard left <= right else {
-//            return self.find(id: left > 0 ? left - 1: 0, event: event)
-//            .and(
-//                self.find(id: right + 1, event: event)
-//                .flatMapError {
-//                    switch $0 {
-//                    case File.Error.seekError:
-//                        return self.find(id: right, event: event)
-//                    default:
-//                        return self.eventLoop.makeFailedFuture($0)
-//                    }
-//                }
-//            )
-//            .flatMap {
-//                self.eventLoop.makeFailedFuture(
-//                    File.NoExactMatchFound(left: $0.0, right: $0.1)
-//                )
-//            }
-//        }
-//
-//        let mid = (left + right) / 2
-//        let midRow: EventLoopFuture<Model> = self.find(id: mid, event: #function)
-//        return midRow.and(
-//            midRow.map(selector)
-//        )
-//        .flatMap { row, candidate in
-//            if candidate < comparable {
-//                return self.binarySearch(comparable: comparable,
-//                                         left: mid + 1,
-//                                         right: right,
-//                                         selector: selector)
-//            } else if candidate > comparable {
-//                return self.binarySearch(comparable: comparable,
-//                                         left: left,
-//                                         right: mid - 1,
-//                                         selector: selector)
-//            } else { // candidate == comparable
-//                return midRow
-//            }
-//        }
-//    }
-//
     @inlinable
-    func binarySearch<T: Comparable>(comparable: T,
-                                     left: Int,
-                                     right: Int,
-                                     promise: EventLoopPromise<Model>,
-                                     selector: @escaping (Model) -> T) {
+    func binarySearch<T: Comparable & Sendable>(comparable: T,
+                                                left: Int,
+                                                right: Int,
+                                                promise: EventLoopPromise<Model>,
+                                                selector: @escaping @Sendable (Model) -> T) {
         guard left <= right else {
             promise.fail(File.Error.notFound(message: "left index greater than right index"))
             return
@@ -422,8 +379,12 @@ public extension FileRepo {
     }
     
     @inlinable
-    func append<C, T>(_ rows: C) -> EventLoopFuture<Void> where C: Collection, C.Element == T, T.ID == Int, T == Model {
-        self.checkOffset(for: rows.first!.id)
+    func append<C, T>(_ rows: C) -> EventLoopFuture<Void> where C: Collection & Sendable, C.Element == T, T.ID == Int, T == Model {
+        guard let first = rows.first else {
+            return self.eventLoop.makeSucceededFuture(())
+        }
+
+        return self.checkOffset(for: first.id)
         .and(self.count())
         .flatMapThrowing { id, count in
             guard id == count else {
@@ -432,12 +393,8 @@ public extension FileRepo {
             }
         }
         .flatMap {
-            EventLoopFuture.andAllSucceed(
-                rows.map(self.write(_:)),
-                on: self.eventLoop
-            )
-            .recover {
-                preconditionFailure("\($0)")
+            rows.reduce(self.eventLoop.makeSucceededFuture(())) { chain, row in
+                chain.flatMap { self.write(row) }
             }
         }
     }

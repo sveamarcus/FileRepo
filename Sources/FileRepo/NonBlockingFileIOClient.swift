@@ -13,59 +13,59 @@
 import NIOCore
 import NIOPosix
 
-public struct NonBlockingFileIOClient {
+public struct NonBlockingFileIOClient: Sendable {
     @usableFromInline
-    let changeFileSize0: (NIOFileHandle, Int64, EventLoop) -> EventLoopFuture<()>
+    let changeFileSize0: @Sendable (NIOFileHandle, Int64, EventLoop) -> EventLoopFuture<()>
     @usableFromInline
-    let close0: (NIOFileHandle, EventLoop) -> EventLoopFuture<()>
+    let close0: @Sendable (NIOFileHandle, EventLoop) -> EventLoopFuture<()>
     @usableFromInline
-    let openFile0: (String, NIOFileHandle.Mode, NIOFileHandle.Flags, EventLoop) -> EventLoopFuture<NIOFileHandle>
+    let openFile0: @Sendable (String, NIOFileHandle.Mode, NIOFileHandle.Flags, EventLoop) -> EventLoopFuture<NIOFileHandle>
     @usableFromInline
-    let readChunkedFileHandle: (NIOFileHandle,
-                                Int,
-                                Int,
-                                ByteBufferAllocator,
-                                EventLoop,
-                                @escaping (ByteBuffer) -> EventLoopFuture<Void>) -> EventLoopFuture<Void>
+    let readChunkedFileHandle: @Sendable (NIOFileHandle,
+                                          Int,
+                                          Int,
+                                          ByteBufferAllocator,
+                                          EventLoop,
+                                          @escaping @Sendable (ByteBuffer) -> EventLoopFuture<Void>) -> EventLoopFuture<Void>
     @usableFromInline
-    let readChunkedFileOffset: (NIOFileHandle,
-                                Int64,
-                                Int,
-                                Int,
-                                ByteBufferAllocator,
-                                EventLoop,
-                                @escaping (ByteBuffer) -> EventLoopFuture<Void>) -> EventLoopFuture<Void>
+    let readChunkedFileOffset: @Sendable (NIOFileHandle,
+                                          Int64,
+                                          Int,
+                                          Int,
+                                          ByteBufferAllocator,
+                                          EventLoop,
+                                          @escaping @Sendable (ByteBuffer) -> EventLoopFuture<Void>) -> EventLoopFuture<Void>
     @usableFromInline
-    let readChunkedFileRegion: (FileRegion,
-                                Int,
-                                ByteBufferAllocator,
-                                EventLoop,
-                                @escaping (ByteBuffer) -> EventLoopFuture<Void>) -> EventLoopFuture<Void>
+    let readChunkedFileRegion: @Sendable (FileRegion,
+                                          Int,
+                                          ByteBufferAllocator,
+                                          EventLoop,
+                                          @escaping @Sendable (ByteBuffer) -> EventLoopFuture<Void>) -> EventLoopFuture<Void>
     @usableFromInline
-    let readFileHandle: (NIOFileHandle, Int, ByteBufferAllocator, EventLoop) -> EventLoopFuture<ByteBuffer>
+    let readFileHandle: @Sendable (NIOFileHandle, Int, ByteBufferAllocator, EventLoop) -> EventLoopFuture<ByteBuffer>
     @usableFromInline
-    let readFileOffset: (NIOFileHandle, Int64, Int, ByteBufferAllocator, EventLoop) -> EventLoopFuture<ByteBuffer>
+    let readFileOffset: @Sendable (NIOFileHandle, Int64, Int, ByteBufferAllocator, EventLoop) -> EventLoopFuture<ByteBuffer>
     @usableFromInline
-    let readFileRegion: (FileRegion, ByteBufferAllocator, EventLoop) -> EventLoopFuture<ByteBuffer>
+    let readFileRegion: @Sendable (FileRegion, ByteBufferAllocator, EventLoop) -> EventLoopFuture<ByteBuffer>
     @usableFromInline
-    let readFileSize0: (NIOFileHandle, EventLoop) -> EventLoopFuture<Int64>
+    let readFileSize0: @Sendable (NIOFileHandle, EventLoop) -> EventLoopFuture<Int64>
     @usableFromInline
-    let write0: (NIOFileHandle, Int64, ByteBuffer, EventLoop) -> EventLoopFuture<()>
+    let write0: @Sendable (NIOFileHandle, Int64, ByteBuffer, EventLoop) -> EventLoopFuture<()>
     @usableFromInline
-    let sync0: (NIOFileHandle, EventLoop) -> EventLoopFuture<Void>
+    let sync0: @Sendable (NIOFileHandle, EventLoop) -> EventLoopFuture<Void>
 
-    public init(changeFileSize0: @escaping (NIOFileHandle, Int64, EventLoop) -> EventLoopFuture<()>,
-                close0: @escaping (NIOFileHandle, EventLoop) -> EventLoopFuture<()>,
-                openFile0: @escaping (String, NIOFileHandle.Mode, NIOFileHandle.Flags, EventLoop) -> EventLoopFuture<NIOFileHandle>,
-                readChunkedFileHandle: @escaping (NIOFileHandle, Int, Int, ByteBufferAllocator, EventLoop, @escaping (ByteBuffer) -> EventLoopFuture<Void>) -> EventLoopFuture<Void>,
-                readChunkedFileOffset: @escaping (NIOFileHandle, Int64, Int, Int, ByteBufferAllocator, EventLoop, @escaping (ByteBuffer) -> EventLoopFuture<Void>) -> EventLoopFuture<Void>,
-                readChunkedFileRegion: @escaping (FileRegion, Int, ByteBufferAllocator, EventLoop, @escaping (ByteBuffer) -> EventLoopFuture<Void>) -> EventLoopFuture<Void>,
-                readFileHandle: @escaping (NIOFileHandle, Int, ByteBufferAllocator, EventLoop) -> EventLoopFuture<ByteBuffer>,
-                readFileOffset: @escaping (NIOFileHandle, Int64, Int, ByteBufferAllocator, EventLoop) -> EventLoopFuture<ByteBuffer>,
-                readFileRegion: @escaping (FileRegion, ByteBufferAllocator, EventLoop) -> EventLoopFuture<ByteBuffer>,
-                readFileSize0: @escaping (NIOFileHandle, EventLoop) -> EventLoopFuture<Int64>,
-                write0: @escaping (NIOFileHandle, Int64, ByteBuffer, EventLoop) -> EventLoopFuture<()>,
-                sync0: @escaping (NIOFileHandle, EventLoop) -> EventLoopFuture<Void>) {
+    public init(changeFileSize0: @escaping @Sendable (NIOFileHandle, Int64, EventLoop) -> EventLoopFuture<()>,
+                close0: @escaping @Sendable (NIOFileHandle, EventLoop) -> EventLoopFuture<()>,
+                openFile0: @escaping @Sendable (String, NIOFileHandle.Mode, NIOFileHandle.Flags, EventLoop) -> EventLoopFuture<NIOFileHandle>,
+                readChunkedFileHandle: @escaping @Sendable (NIOFileHandle, Int, Int, ByteBufferAllocator, EventLoop, @escaping @Sendable (ByteBuffer) -> EventLoopFuture<Void>) -> EventLoopFuture<Void>,
+                readChunkedFileOffset: @escaping @Sendable (NIOFileHandle, Int64, Int, Int, ByteBufferAllocator, EventLoop, @escaping @Sendable (ByteBuffer) -> EventLoopFuture<Void>) -> EventLoopFuture<Void>,
+                readChunkedFileRegion: @escaping @Sendable (FileRegion, Int, ByteBufferAllocator, EventLoop, @escaping @Sendable (ByteBuffer) -> EventLoopFuture<Void>) -> EventLoopFuture<Void>,
+                readFileHandle: @escaping @Sendable (NIOFileHandle, Int, ByteBufferAllocator, EventLoop) -> EventLoopFuture<ByteBuffer>,
+                readFileOffset: @escaping @Sendable (NIOFileHandle, Int64, Int, ByteBufferAllocator, EventLoop) -> EventLoopFuture<ByteBuffer>,
+                readFileRegion: @escaping @Sendable (FileRegion, ByteBufferAllocator, EventLoop) -> EventLoopFuture<ByteBuffer>,
+                readFileSize0: @escaping @Sendable (NIOFileHandle, EventLoop) -> EventLoopFuture<Int64>,
+                write0: @escaping @Sendable (NIOFileHandle, Int64, ByteBuffer, EventLoop) -> EventLoopFuture<()>,
+                sync0: @escaping @Sendable (NIOFileHandle, EventLoop) -> EventLoopFuture<Void>) {
         self.changeFileSize0 = changeFileSize0
         self.close0 = close0
         self.openFile0 = openFile0
@@ -88,12 +88,12 @@ public extension NonBlockingFileIOClient {
                         eventLoop: EventLoop) -> EventLoopFuture<()> {
         self.changeFileSize0(fileHandle, size, eventLoop)
     }
-    
+
     @inlinable
     func close(fileHandle: NIOFileHandle, eventLoop: EventLoop) -> EventLoopFuture<()> {
         self.close0(fileHandle, eventLoop)
     }
-    
+
     @inlinable
     func openFile(path: String,
                   mode: NIOFileHandle.Mode,
@@ -101,17 +101,17 @@ public extension NonBlockingFileIOClient {
                   eventLoop: EventLoop) -> EventLoopFuture<NIOFileHandle> {
         self.openFile0(path, mode, flags, eventLoop)
     }
-    
+
     @inlinable
     func readChunked(fileHandle: NIOFileHandle,
                      byteCount: Int,
                      chunkSize: Int = NonBlockingFileIO.defaultChunkSize,
                      allocator: ByteBufferAllocator,
                      eventLoop: EventLoop,
-                     chunkHandler: @escaping (ByteBuffer) -> EventLoopFuture<Void>) -> EventLoopFuture<Void> {
+                     chunkHandler: @escaping @Sendable (ByteBuffer) -> EventLoopFuture<Void>) -> EventLoopFuture<Void> {
         self.readChunkedFileHandle(fileHandle, byteCount, chunkSize, allocator, eventLoop, chunkHandler)
     }
-    
+
     @inlinable
     func readChunked(fileHandle: NIOFileHandle,
                      fromOffset: Int64,
@@ -119,19 +119,19 @@ public extension NonBlockingFileIOClient {
                      chunkSize: Int = NonBlockingFileIO.defaultChunkSize,
                      allocator: ByteBufferAllocator,
                      eventLoop: EventLoop,
-                     chunkHandler: @escaping (ByteBuffer) -> EventLoopFuture<Void>) -> EventLoopFuture<Void> {
+                     chunkHandler: @escaping @Sendable (ByteBuffer) -> EventLoopFuture<Void>) -> EventLoopFuture<Void> {
         self.readChunkedFileOffset(fileHandle, fromOffset, byteCount, chunkSize, allocator, eventLoop, chunkHandler)
     }
-    
+
     @inlinable
     func readChunked(fileRegion: FileRegion,
                      chunkSize: Int = NonBlockingFileIO.defaultChunkSize,
                      allocator: ByteBufferAllocator,
                      eventLoop: EventLoop,
-                     chunkHandler: @escaping (ByteBuffer) -> EventLoopFuture<Void>) -> EventLoopFuture<Void> {
+                     chunkHandler: @escaping @Sendable (ByteBuffer) -> EventLoopFuture<Void>) -> EventLoopFuture<Void> {
         self.readChunkedFileRegion(fileRegion, chunkSize, allocator, eventLoop, chunkHandler)
     }
-    
+
     @inlinable
     func read(fileHandle: NIOFileHandle,
               byteCount: Int,
@@ -139,7 +139,7 @@ public extension NonBlockingFileIOClient {
               eventLoop: EventLoop) -> EventLoopFuture<ByteBuffer> {
         self.readFileHandle(fileHandle, byteCount, allocator, eventLoop)
     }
-    
+
     @inlinable
     func read(fileHandle: NIOFileHandle,
               fromOffset fileOffset: Int64,
@@ -148,20 +148,20 @@ public extension NonBlockingFileIOClient {
               eventLoop: EventLoop) -> EventLoopFuture<ByteBuffer> {
         self.readFileOffset(fileHandle, fileOffset, byteCount, allocator, eventLoop)
     }
-    
+
     @inlinable
     func read(fileRegion: FileRegion,
               allocator: ByteBufferAllocator,
               eventLoop: EventLoop) -> EventLoopFuture<ByteBuffer> {
         self.readFileRegion(fileRegion, allocator, eventLoop)
     }
-    
+
     @inlinable
     func readFileSize(fileHandle: NIOFileHandle,
                       eventLoop: EventLoop) -> EventLoopFuture<Int64> {
         self.readFileSize0(fileHandle, eventLoop)
     }
-    
+
     @inlinable
     func write(fileHandle: NIOFileHandle,
                toOffset: Int64,
@@ -169,7 +169,7 @@ public extension NonBlockingFileIOClient {
                eventLoop: EventLoop) -> EventLoopFuture<()> {
         self.write0(fileHandle, toOffset, buffer, eventLoop)
     }
-    
+
     @inlinable
     func sync(fileHandle: NIOFileHandle, eventLoop: EventLoop) -> EventLoopFuture<Void> {
         self.sync0(fileHandle, eventLoop)
@@ -181,7 +181,7 @@ public extension NonBlockingFileIOClient {
     @inlinable
     static func live(_ threadPool: NIOThreadPool) -> Self {
         let io = NonBlockingFileIO(threadPool: threadPool)
-        
+
         return NonBlockingFileIOClient(
             changeFileSize0: io.changeFileSize(fileHandle:size:eventLoop:),
             close0: { nioFileHandle, eventLoop in
